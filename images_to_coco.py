@@ -2,7 +2,8 @@ import numpy as np
 import cv2
 import os
 import json
-from tqdm import trange
+from tqdm import trange, tqdm
+from tqdm.contrib.itertools import product
 import argparse
 import glob
 import zarr
@@ -11,22 +12,19 @@ import os
 import json
 import time
 from utils import *
-from itertools import product
 
 from cellpose import models, io
 import random
 
-work in progress - not ready to run!
-
 def main():
     # modify these:
-    debug_mode = False
+    debug_mode = True
     cellpose_model_path = 'cellpose_models/cp_dpc_new'
     gcs_project = 'soe-octopi'
-    gcs_token = '/home/prakashlab/Documents/keys/data-20220317-keys.json'
+    gcs_token = 'data-20220317-keys.json'
     bucket_source = 'gs://octopi-malaria-tanzania-2021-data'
     bucket_destination = 'gs://octopi-malaria-data-processing'
-    dir_out = 'coco'
+    dir_out = 'coco_format'
 
     # Randomly split images into training, testing, and verification datasets at this proportion
     dist = {"training": 0.7, "testing": 0.15, "verification": 0.15}
@@ -95,7 +93,10 @@ def main():
     parameters = {}
     for dataset_id in DATASET_ID:
         # Get acquisition parameters
-        json_file = fs.cat(bucket_source + '/' + dataset_id + '/acquisition parameters.json')
+        try:
+            json_file = fs.cat(bucket_source + '/' + dataset_id + '/acquisition parameters.json')
+        except:
+            continue
         acquisition_parameters = json.loads(json_file)
         parameters['row_start'] = 0
         parameters['row_end'] = acquisition_parameters['Ny']
@@ -104,7 +105,7 @@ def main():
         parameters['z_start'] = 0
         parameters['z_end'] = acquisition_parameters['Nz']
         if debug_mode:
-            parameters['row_end'] = 2
+            parameters['row_end'] = 1
             parameters['column_end'] = 2
         # initialize segmentation stats
         segmantation_stat_pd = pd.DataFrame(columns=['FOV_row','FOV_col','FOV_z','count'])
@@ -138,8 +139,8 @@ def main():
             image_data = {
                 "id": im_id,
                 "license": 0,
-                "width": image.shape[0],
-                "height": image.shape[1],
+                "width": I_DPC.shape[0],
+                "height": I_DPC.shape[1],
                 "file_name": file_id + ".png",
                 "dataset": dataset_id
             }
@@ -156,7 +157,7 @@ def main():
             mask, flows, styles = model.eval(im, diameter=None)
             # store stats
             number_of_cells = np.amax(mask)
-            FOV_entry = pd.DataFrame.from_dict({'FOV_row':[i],'FOV_col':[j],'FOV_z':[k],count:[number_of_cells]})
+            FOV_entry = pd.DataFrame.from_dict({'FOV_row':[i],'FOV_col':[j],'FOV_z':[k],'count':[number_of_cells]})
             segmantation_stat_pd = pd.concat([segmantation_stat_pd,FOV_entry])
             # cell mask polygons and bbox
             for cell in trange(1, 1 + int(np.max(mask))):
