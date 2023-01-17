@@ -25,6 +25,8 @@ def main():
     bucket_source = 'gs://octopi-malaria-tanzania-2021-data'
     bucket_destination = 'gs://octopi-malaria-data-processing'
     dir_out = 'coco_format'
+    flatfield_left = np.load('flatfield_left.npy')
+    flatfield_right = np.load('flatfield_right.npy')
 
     # Randomly split images into training, testing, and verification datasets at this proportion
     dist = {"training": 0.7, "testing": 0.15, "verification": 0.15}
@@ -133,6 +135,9 @@ def main():
                 I_BF_right = I_BF_right[:,:,1]
             I_BF_left = I_BF_left.astype('float')/255
             I_BF_right = I_BF_right.astype('float')/255
+            # flatfield correction
+            lft = lft/flatfield_left
+            rht = rht/flatfield_right
             I_DPC = generate_dpc(I_BF_left,I_BF_right)
             # store image data
             im_id = len(images[sel_key])
