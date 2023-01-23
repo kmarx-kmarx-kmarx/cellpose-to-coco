@@ -19,14 +19,16 @@ import random
 def main():
     # modify these:
     debug_mode = True
-    cellpose_model_path = 'cellpose_models/cp_dpc_new'
+    debug_amount = 13
+    cellpose_model_path = '/home/prakashlab/Documents/Kevin/Kevin/cp_dpc_new'
     gcs_project = 'soe-octopi'
-    gcs_token = 'data-20220317-keys.json'
+    gcs_token = '/home/prakashlab/Documents/keys/data-20220317-keys.json'
     bucket_source = 'gs://octopi-malaria-tanzania-2021-data'
-    bucket_destination = 'gs://octopi-malaria-data-processing'
-    dir_out = 'coco_format'
+    bucket_destination = 'gs://octopi-malaria-data-annotation'
+    dir_out = 'coco_format_full'
     flatfield_left = np.load('flatfield_left.npy')
     flatfield_right = np.load('flatfield_right.npy')
+    flatfield_flr = np.load('flatfield_fluorescence.npy')
 
     # Randomly split images into training, testing, and verification datasets at this proportion
     dist = {"training": 0.7, "testing": 0.15, "verification": 0.15}
@@ -96,8 +98,10 @@ def main():
     for dataset_id in DATASET_ID:
         # Get acquisition parameters
         try:
-            json_file = fs.cat(bucket_source + '/' + dataset_id + '/acquisition parameters.json')
+            print(os.path.join(bucket_source, dataset_id, 'acquisition parameters.json'))
+            json_file = fs.cat(os.path.join(bucket_source, dataset_id, 'acquisition parameters.json'))
         except:
+            print("No acquisition params!")
             continue
         acquisition_parameters = json.loads(json_file)
         parameters['row_start'] = 0
@@ -107,8 +111,8 @@ def main():
         parameters['z_start'] = 0
         parameters['z_end'] = acquisition_parameters['Nz']
         if debug_mode:
-            parameters['row_end'] = 1
-            parameters['column_end'] = 2
+            parameters['row_end'] = debug_amount
+            parameters['column_end'] = debug_amount
         # initialize segmentation stats
         segmantation_stat_pd = pd.DataFrame(columns=['FOV_row','FOV_col','FOV_z','count'])
         total_number_of_cells = 0
@@ -130,30 +134,43 @@ def main():
             # generate DPC
             I_BF_left = imread_gcsfs(fs,bucket_source + '/' + dataset_id + '/0/' + file_id + '_' + 'BF_LED_matrix_left_half.bmp')
             I_BF_right = imread_gcsfs(fs,bucket_source + '/' + dataset_id + '/0/' + file_id + '_' + 'BF_LED_matrix_right_half.bmp')
+            I_FLR = imread_gcsfs(fs,bucket_source + '/' + dataset_id + '/0/' + file_id + '_' + 'Fluorescence_405_nm_Ex.bmp')
             if len(I_BF_left.shape)==3: # convert to mono if color
                 I_BF_left = I_BF_left[:,:,1]
                 I_BF_right = I_BF_right[:,:,1]
             I_BF_left = I_BF_left.astype('float')/255
             I_BF_right = I_BF_right.astype('float')/255
+            I_FLR = I_FLR.astype('float')/255
             # flatfield correction
-            lft = lft/flatfield_left
-            rht = rht/flatfield_right
+            I_BF_left = I_BF_left/flatfield_left
+            I_BF_right = I_BF_right/flatfield_right
+            I_FLR = I_FLR/np.dstack((flatfield_flr, flatfield_flr, flatfield_flr))
+            # generate dpc
             I_DPC = generate_dpc(I_BF_left,I_BF_right)
+            dpc_image = I_DPC * 255
+            dpc_image = dpc_image.astype("uint8")
+            flr_image = I_FLR * 255
+            flr_image = flr_image.astype("uint8")
+            flr_image = flr_image[:,:,::-1]
+            # overlay on another layer
+            whole_image = np.dstack((flr_image, dpc_image))
             # store image data
             im_id = len(images[sel_key])
+            image_path = os.path.join(bucket_destination, dir_out, sel_key, 'data', f'{im_id}.tiff')
             image_data = {
                 "id": im_id,
                 "license": 0,
                 "width": I_DPC.shape[0],
                 "height": I_DPC.shape[1],
-                "file_name": file_id + ".png",
-                "dataset": dataset_id
+                "file_name": f"{im_id}.tiff",
+                "dataset": dataset_id,
+                "view": file_id,
+                "url": f"https://storage.cloud.google.com/{image_path[5:]}"
             }
             images[sel_key].append(image_data)
             # store image to bucket (before preprocessing)
-            image_path = os.path.join(bucket_destination, dir_out, sel_key, 'data', f'{file_id}.bmp')
             with fs.open(image_path, 'wb' ) as f:
-                f.write(cv2.imencode('.bmp',I_DPC)[1].tobytes())
+                f.write(cv2.imencode('.tiff',whole_image)[1].tobytes())
             # segmentation
             # preprocessing - normalize the image
             im = I_DPC - np.min(I_DPC)
